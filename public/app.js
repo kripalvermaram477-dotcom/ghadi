@@ -502,7 +502,25 @@ route('/notices', async () => {
   `);
 });
 
-// handle invite in register url
-const params = new URLSearchParams(location.search);
-// (hash router ignores query on hash; check hash query)
+// ---------- Theme / background from admin ----------
+function applyTheme(cfg) {
+  const root = document.documentElement;
+  if (cfg.theme_primary) root.style.setProperty('--primary', cfg.theme_primary);
+  if (cfg.theme_accent) root.style.setProperty('--accent', cfg.theme_accent);
+  if (cfg.theme_bg) root.style.setProperty('--bg', cfg.theme_bg);
+  if (cfg.bg_image) {
+    const ov = Number(cfg.bg_overlay || 0.45);
+    document.body.style.backgroundImage = `linear-gradient(rgba(15,23,42,${ov}), rgba(15,23,42,${ov})), url('${cfg.bg_image}')`;
+    document.body.style.backgroundSize = 'cover';
+    document.body.style.backgroundAttachment = 'fixed';
+    document.body.style.backgroundPosition = 'center';
+  } else {
+    document.body.style.backgroundImage = '';
+  }
+}
+async function initTheme() {
+  try { applyTheme(await api('/common/config')); } catch (e) { /* ignore */ }
+}
+
+initTheme();
 render();

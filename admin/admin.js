@@ -313,23 +313,70 @@ async function renderNotices() {
   });
 }
 
+const COLOR_KEYS = ['theme_primary', 'theme_accent', 'theme_bg'];
+const APPEARANCE_KEYS = ['site_name', 'theme_primary', 'theme_accent', 'theme_bg', 'bg_image', 'bg_overlay'];
+const PRESETS = [
+  { name: 'Midnight', primary: '#1e1b4b', accent: '#f59e0b', bg: '#f1f5f9' },
+  { name: 'Ocean', primary: '#0f766e', accent: '#06b6d4', bg: '#ecfeff' },
+  { name: 'Royal', primary: '#4c1d95', accent: '#ec4899', bg: '#faf5ff' },
+  { name: 'Dark', primary: '#0f172a', accent: '#fbbf24', bg: '#0f172a' },
+  { name: 'Forest', primary: '#166534', accent: '#ca8a04', bg: '#f0fdf4' },
+  { name: 'Rose', primary: '#9f1239', accent: '#f43f5e', bg: '#fff1f2' },
+];
+
+function cfgField(k, v) {
+  if (COLOR_KEYS.includes(k)) {
+    return `<div class="row" style="align-items:center;margin-bottom:10px">
+      <input type="color" class="input" data-cfg="${k}" value="${v || '#000000'}" style="width:60px;height:40px;padding:2px;margin:0" />
+      <div style="flex:1"><label style="font-size:12px;color:var(--muted)">${k}</label>
+      <input class="input" data-cfg="${k}" value="${v || ''}" style="margin:0" /></div>
+    </div>`;
+  }
+  return `<label style="font-size:12px;color:var(--muted)">${k}</label>
+    <input class="input" data-cfg="${k}" value="${v ?? ''}" />`;
+}
+
 async function renderConfig() {
   const d = await api('/config');
   const c = d.config || {};
+  const bg = c.bg_image || '';
   layout(`
     <div class="topbar"><h2>Settings</h2></div>
     <div class="card">
-      ${Object.keys(c).map(k => `
-        <label style="font-size:12px;color:var(--muted)">${k}</label>
-        <input class="input" data-cfg="${k}" value="${c[k] ?? ''}" />
-      `).join('')}
-      <button class="btn btn-primary" id="saveCfg">Save</button>
+      <h3 style="margin-bottom:12px;color:var(--primary)">Appearance</h3>
+      <div class="row" style="margin-bottom:14px">
+        ${PRESETS.map(p => `<button class="btn btn-outline" data-preset='${JSON.stringify(p)}'>${p.name}</button>`).join('')}
+      </div>
+      ${APPEARANCE_KEYS.map(k => cfgField(k, c[k])).join('')}
+      <div style="margin-top:10px;border-radius:10px;overflow:hidden;border:1px solid var(--border)">
+        <div style="height:120px;background:${bg ? `url('${bg}') center/cover` : 'linear-gradient(135deg,#1e1b4b,#312e81)'};display:flex;align-items:center;justify-content:center;color:#fff;font-weight:700">Background Preview</div>
+      </div>
+      <button class="btn btn-primary" id="saveCfg" style="margin-top:14px">Save Appearance</button>
+    </div>
+    <div class="card">
+      <h3 style="margin-bottom:12px;color:var(--primary)">Other Settings</h3>
+      ${Object.keys(c).filter(k => !APPEARANCE_KEYS.includes(k)).map(k => cfgField(k, c[k])).join('')}
+      <button class="btn btn-primary" id="saveOther">Save Settings</button>
     </div>
   `);
+  document.querySelectorAll('[data-preset]').forEach(b => {
+    b.onclick = () => {
+      const p = JSON.parse(b.dataset.preset);
+      document.querySelectorAll('[data-cfg="theme_primary"]').forEach(i => i.value = p.primary);
+      document.querySelectorAll('[data-cfg="theme_accent"]').forEach(i => i.value = p.accent);
+      document.querySelectorAll('[data-cfg="theme_bg"]').forEach(i => i.value = p.bg);
+      toast('Preset applied — click Save');
+    };
+  });
   $('#saveCfg').onclick = async () => {
     const body = {};
-    document.querySelectorAll('[data-cfg]').forEach(i => body[i.dataset.cfg] = i.value);
-    try { await api('/config', { method: 'POST', body: JSON.stringify(body) }); toast('Saved'); } catch (e) { toast(e.message); }
+    document.querySelectorAll('[data-cfg]').forEach(i => { body[i.dataset.cfg] = i.value; });
+    try { await api('/config', { method: 'POST', body: JSON.stringify(body) }); toast('Appearance saved'); } catch (e) { toast(e.message); }
+  };
+  $('#saveOther').onclick = async () => {
+    const body = {};
+    document.querySelectorAll('[data-cfg]').forEach(i => { body[i.dataset.cfg] = i.value; });
+    try { await api('/config', { method: 'POST', body: JSON.stringify(body) }); toast('Settings saved'); } catch (e) { toast(e.message); }
   };
 }
 

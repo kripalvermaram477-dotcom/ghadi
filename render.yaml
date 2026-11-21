@@ -2,15 +2,15 @@ services:
   - type: web
     name: ghadi
     runtime: node
-    plan: starter
-    buildCommand: pnpm install --prod=false
-    startCommand: node scripts/seed.js && node server.js
+    plan: free
+    buildCommand: npm install
+    startCommand: npm start
     healthCheckPath: /api/common/config
     envVars:
       - key: NODE_VERSION
         value: "22"
-      - key: DB_PATH
-        value: /var/data/ghadi.db
+      - key: DATABASE_URL
+        sync: false
       - key: USER_JWT_SECRET
         generateValue: true
       - key: ADMIN_JWT_SECRET
@@ -19,7 +19,3 @@ services:
         value: "9999999999"
       - key: ADMIN_PASSWORD
         sync: false
-    disk:
-      name: ghadi-data
-      mountPath: /var/data
-      sizeGB: 1
