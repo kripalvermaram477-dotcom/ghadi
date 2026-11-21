@@ -59,7 +59,9 @@ its connection string as `DATABASE_URL`, plus `USER_JWT_SECRET`,
 
 ## Payments
 
-By default `mock_payments=1` so non-manual recharges auto-credit for testing.
+By default `mock_payments=0`, so online channels are disabled until Razorpay is
+configured. For local testing only, set `mock_payments=1` in Admin → Settings
+to auto-credit recharges.
 
 **Manual UPI (default):** set `upi_id`, `upi_name` and optionally `upi_qr`
 (image URL or data URI) in Admin → Settings. The user pays, submits the UTR,

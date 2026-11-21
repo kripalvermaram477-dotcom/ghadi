@@ -157,13 +157,14 @@ app.post('/api/wallet/recharge', userAuth, ah(async (req, res) => {
     return ok(res, { manual: true, recharge_id: created.rows[0].id, amount: amt, upi_id, upi_name, upi_qr });
   }
   const rz = getRazorpay();
-  const mock = (await getConfig('mock_payments')) === '1' || !rz;
+  const mock = (await getConfig('mock_payments')) === '1';
   if (mock) {
     await query('INSERT INTO recharges (user_id, amount, channel, status) VALUES ($1, $2, $3, $4)', [req.user.id, amt, channel || 'mock', 'success']);
     await query('UPDATE users SET balance = balance + $1 WHERE id = $2', [amt, req.user.id]);
     await query('INSERT INTO transactions (user_id, type, amount, status, note) VALUES ($1, $2, $3, $4, $5)', [req.user.id, 'recharge', amt, 'success', `Recharge via ${channel || 'mock'}`]);
     return ok(res, { mock: true, credited: true });
   }
+  if (!rz) return fail(res, 'Online payment is not configured. Please use UPI transfer.', 400);
   rz.orders.create({ amount: Math.round(amt * 100), currency: 'INR', receipt: 'rcpt_' + Date.now() }, async (err, order) => {
     if (err) return fail(res, err.error?.description || 'Razorpay error', 500);
     try {
