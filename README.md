@@ -39,18 +39,23 @@ Change the password right after the first login (Admin → Settings).
 
 ## Deploy on Render (free)
 
-1. Push this repo to GitHub.
-2. Create a free Postgres database on Neon (https://neon.tech) and copy the
-   connection string (it ends with `?sslmode=require`).
-3. On Render: **New → Web Service**, connect the repo, plan **Free**.
-   - Build: `npm install`
-   - Start: `npm start`
-   - Health check: `/api/common/config`
-4. Add env vars: `DATABASE_URL`, `USER_JWT_SECRET`, `ADMIN_JWT_SECRET`,
-   `ADMIN_PHONE`, `ADMIN_PASSWORD`.
-5. Deploy. Tables and seed data are created automatically.
+The included `render.yaml` creates a free web service **and** a free Postgres
+database, and wires `DATABASE_URL` automatically.
 
-`render.yaml` is included for Blueprint deploys.
+1. Push this repo to GitHub.
+2. On Render: **New → Blueprint**, connect the repo and apply.
+3. Set `ADMIN_PASSWORD` when prompted (the only value that is not generated).
+4. Deploy. Tables and seed data are created automatically.
+
+Or manually: **New → Web Service** (Free), build `npm install`, start
+`npm start`, health check `/api/common/config`, then create a Postgres and add
+its connection string as `DATABASE_URL`, plus `USER_JWT_SECRET`,
+`ADMIN_JWT_SECRET`, `ADMIN_PHONE`, `ADMIN_PASSWORD`.
+
+> Render's free Postgres is deleted after 30 days. For long-term use, create a
+> free Postgres on Neon (https://neon.tech) and replace `DATABASE_URL` with its
+> connection string (ending in `?sslmode=require`). Dump/restore data first.
+> A Render Starter database or disk-backed plan also works.
 
 ## Payments
 

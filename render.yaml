@@ -1,3 +1,9 @@
+databases:
+  - name: ghadi-db
+    databaseName: ghadi
+    user: ghadi
+    plan: free
+
 services:
   - type: web
     name: ghadi
@@ -10,7 +16,9 @@ services:
       - key: NODE_VERSION
         value: "22"
       - key: DATABASE_URL
-        sync: false
+        fromDatabase:
+          name: ghadi-db
+          property: connectionString
       - key: USER_JWT_SECRET
         generateValue: true
       - key: ADMIN_JWT_SECRET
