@@ -7,6 +7,7 @@ import cron from 'node-cron';
 import { query, get, all, getConfig, setConfig } from './lib/db.js';
 import { hashPassword, verifyPassword, signUserToken, signAdminToken, userAuth, adminAuth, genInviteCode } from './lib/auth.js';
 import { getRazorpay, getKeyId, verifySignature } from './lib/razorpay.js';
+import { createRupayexOrder, checkRupayexOrder, getRupayexConfig } from './lib/rupayex.js';
 import { runPayouts, getOrderEarnings } from './lib/payouts.js';
 import { seed } from './lib/seed.js';
 
@@ -16,6 +17,7 @@ const PORT = process.env.PORT || 3000;
 
 app.use(cors());
 app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 app.use(express.static(path.join(__dirname, 'public')));
 
 // ---------- helpers ----------
@@ -26,6 +28,26 @@ function ah(fn) {
     console.error(e);
     fail(res, e.message || 'Server error', 500);
   });
+}
+
+function publicBase(req) {
+  const configured = process.env.PUBLIC_URL || process.env.RENDER_EXTERNAL_URL;
+  if (configured) return configured.replace(/\/+$/, '');
+  return `${req.protocol}://${req.get('host')}`;
+}
+
+// Credits a recharge exactly once, even if webhook and status polling race.
+async function creditRechargeOnce(r, utr, note) {
+  const updated = await query(
+    "UPDATE recharges SET status = 'success', utr = COALESCE($1, utr) WHERE id = $2 AND status <> 'success' RETURNING id",
+    [utr || null, r.id]
+  );
+  if (updated.rowCount !== 1) return false;
+  await query('UPDATE users SET balance = balance + $1 WHERE id = $2', [r.amount, r.user_id]);
+  await query('INSERT INTO transactions (user_id, type, amount, status, note) VALUES ($1, $2, $3, $4, $5)', [
+    r.user_id, 'recharge', r.amount, 'success', note,
+  ]);
+  return true;
 }
 
 // ---------- AUTH ----------
@@ -83,6 +105,7 @@ app.get('/api/common/config', ah(async (req, res) => {
     withdraw_end: obj.withdraw_end,
     razorpay_key_id: obj.razorpay_key_id,
     mock_payments: obj.mock_payments === '1',
+    rupayex_enabled: obj.rupayex_enabled === '1' && !!obj.rupayex_token,
     theme_primary: obj.theme_primary,
     theme_accent: obj.theme_accent,
     theme_bg: obj.theme_bg,
@@ -156,6 +179,31 @@ app.post('/api/wallet/recharge', userAuth, ah(async (req, res) => {
     );
     return ok(res, { manual: true, recharge_id: created.rows[0].id, amount: amt, upi_id, upi_name, upi_qr });
   }
+  if (channel === 'rupayex') {
+    const rx = await getRupayexConfig();
+    if (!rx.enabled) return fail(res, 'RupayEx is not configured. Please use UPI transfer.', 400);
+    const created = await query(
+      "INSERT INTO recharges (user_id, amount, channel, provider, status) VALUES ($1, $2, $3, $4, 'pending') RETURNING id",
+      [req.user.id, amt, 'rupayex', 'rupayex']
+    );
+    const id = created.rows[0].id;
+    const orderId = `GH-${id}-${Date.now().toString(36).toUpperCase()}`;
+    const redirectUrl = `${publicBase(req)}/api/wallet/rupayex/webhook`;
+    try {
+      const order = await createRupayexOrder({
+        amount: amt,
+        orderId,
+        redirectUrl,
+        mobile: req.user.phone,
+        remark: `GHADI wallet recharge #${id}`,
+      });
+      await query('UPDATE recharges SET provider_order_id = $1, payment_url = $2 WHERE id = $3', [orderId, order.payment_url, id]);
+      return ok(res, { gateway: true, recharge_id: id, order_id: orderId, payment_url: order.payment_url });
+    } catch (e) {
+      await query("UPDATE recharges SET status = 'failed' WHERE id = $1", [id]);
+      return fail(res, e.message || 'RupayEx error', 502);
+    }
+  }
   const rz = await getRazorpay();
   const mock = (await getConfig('mock_payments')) === '1';
   if (mock) {
@@ -199,6 +247,56 @@ app.post('/api/wallet/recharge/confirm', userAuth, ah(async (req, res) => {
 app.get('/api/wallet/balance', userAuth, ah(async (req, res) => {
   const u = await get('SELECT balance FROM users WHERE id = $1', [req.user.id]);
   ok(res, { balance: u.balance });
+}));
+
+// RupayEx hosted checkout: return URL / webhook (GET redirects back to the app).
+app.get('/api/wallet/rupayex/webhook', (req, res) => {
+  const q = req.query.order_id ? `?order=${encodeURIComponent(req.query.order_id)}` : '';
+  res.redirect('/#/wallet' + q);
+});
+
+app.post('/api/wallet/rupayex/webhook', ah(async (req, res) => {
+  const orderId = req.body?.order_id;
+  if (!orderId) return res.status(400).json({ ok: false });
+  const r = await get('SELECT * FROM recharges WHERE provider_order_id = $1 AND provider = $2', [orderId, 'rupayex']);
+  if (r && r.status !== 'success') {
+    try {
+      // Never trust the callback body alone: verify with the gateway.
+      const st = await checkRupayexOrder(orderId);
+      if (st.payment_status === 'SUCCESS') {
+        await creditRechargeOnce(r, st.utr, 'Recharge via RupayEx');
+      } else if (st.payment_status === 'FAILURE') {
+        await query("UPDATE recharges SET status = 'failed' WHERE id = $1 AND status = 'pending'", [r.id]);
+      }
+    } catch (e) {
+      console.error('RupayEx webhook verify failed:', e.message);
+    }
+  }
+  res.json({ ok: true });
+}));
+
+app.get('/api/wallet/rupayex/status', userAuth, ah(async (req, res) => {
+  const orderId = req.query.order_id;
+  if (!orderId) return fail(res, 'order_id required');
+  const r = await get('SELECT * FROM recharges WHERE provider_order_id = $1 AND provider = $2 AND user_id = $3', [orderId, 'rupayex', req.user.id]);
+  if (!r) return fail(res, 'Recharge not found', 404);
+  if (r.status === 'success') return ok(res, { status: 'SUCCESS', utr: r.utr });
+
+  let st;
+  try {
+    st = await checkRupayexOrder(orderId);
+  } catch (e) {
+    return fail(res, e.message || 'Could not verify payment', 502);
+  }
+  if (st.payment_status === 'SUCCESS') {
+    await creditRechargeOnce(r, st.utr, 'Recharge via RupayEx');
+    return ok(res, { status: 'SUCCESS', utr: st.utr });
+  }
+  if (st.payment_status === 'FAILURE') {
+    await query("UPDATE recharges SET status = 'failed' WHERE id = $1 AND status = 'pending'", [r.id]);
+    return ok(res, { status: 'FAILURE' });
+  }
+  return ok(res, { status: st.payment_status || 'PENDING' });
 }));
 
 app.get('/api/wallet/records', userAuth, ah(async (req, res) => {

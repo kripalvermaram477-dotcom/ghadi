@@ -59,9 +59,9 @@ its connection string as `DATABASE_URL`, plus `USER_JWT_SECRET`,
 
 ## Payments
 
-By default `mock_payments=0`, so online channels are disabled until Razorpay is
-configured. For local testing only, set `mock_payments=1` in Admin → Settings
-to auto-credit recharges.
+By default `mock_payments=0`, so online channels are disabled until Razorpay or
+RupayEx is configured. For local testing only, set `mock_payments=1` in
+Admin → Settings to auto-credit recharges.
 
 **Manual UPI (default):** set `upi_id`, `upi_name` and optionally `upi_qr`
 (image URL or data URI) in Admin → Settings. The user pays, submits the UTR,
@@ -69,6 +69,20 @@ and the admin approves the recharge to credit the wallet.
 
 **Razorpay:** set `razorpay_key_id`, `razorpay_key_secret` and
 `mock_payments=0` in Admin → Settings.
+
+**RupayEx (UPI / Card checkout):** get your API token from the RupayEx merchant
+panel, then in Admin → Settings set:
+
+| Key | Value |
+| --- | --- |
+| `rupayex_token` | your RupayEx API token |
+| `rupayex_enabled` | `1` |
+| `rupayex_base` | `https://rupayex.net` |
+
+Users then see **UPI / Card (RupayEx)** in Wallet → Recharge. They are
+redirected to the hosted checkout; the site verifies the payment with
+`/api/order-status` and credits the wallet once. The webhook is
+`/api/wallet/rupayex/webhook`. API reference: https://rupayex.net/documentation
 
 ## Notes
 

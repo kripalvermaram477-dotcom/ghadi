@@ -332,6 +332,10 @@ function cfgField(k, v) {
       <input class="input" data-cfg="${k}" value="${v || ''}" style="margin:0" /></div>
     </div>`;
   }
+  if (/token|secret|password/i.test(k)) {
+    return `<label style="font-size:12px;color:var(--muted)">${k}</label>
+    <input class="input" type="password" autocomplete="new-password" data-cfg="${k}" value="${v ?? ''}" />`;
+  }
   return `<label style="font-size:12px;color:var(--muted)">${k}</label>
     <input class="input" data-cfg="${k}" value="${v ?? ''}" />`;
 }
@@ -355,6 +359,11 @@ async function renderConfig() {
     </div>
     <div class="card">
       <h3 style="margin-bottom:12px;color:var(--primary)">Other Settings</h3>
+      <p style="font-size:12px;color:var(--muted);margin-bottom:10px">
+        RupayEx: paste your API token in <b>rupayex_token</b>, set <b>rupayex_enabled</b> to 1,
+        and leave <b>rupayex_base</b> as https://rupayex.net. Then users can pay by UPI/Card
+        from the wallet and the balance is credited automatically after verification.
+      </p>
       ${Object.keys(c).filter(k => !APPEARANCE_KEYS.includes(k)).map(k => cfgField(k, c[k])).join('')}
       <button class="btn btn-primary" id="saveOther">Save Settings</button>
     </div>

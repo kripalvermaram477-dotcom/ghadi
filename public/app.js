@@ -248,8 +248,22 @@ route('/buy/:id', async (params) => {
 
 // ---------- Wallet ----------
 route('/wallet', async () => {
+  const q = currentQuery();
+  const pendingOrder = q.get('order');
+  if (pendingOrder) {
+    try {
+      const s = await api('/wallet/rupayex/status?order_id=' + encodeURIComponent(pendingOrder));
+      if (s.status === 'SUCCESS') toast('Payment successful - balance updated');
+      else if (s.status === 'PENDING') toast('Payment pending confirmation');
+      else toast('Payment ' + String(s.status).toLowerCase());
+    } catch (e) { toast(e.message); }
+    history.replaceState(null, '', '#/wallet');
+  }
   const bal = await api('/wallet/balance');
   const cfg = await api('/common/config');
+  const channels = ['<option value="upi_manual">Manual UPI (no KYC)</option>'];
+  if (cfg.rupayex_enabled) channels.push('<option value="rupayex">UPI / Card (RupayEx)</option>');
+  if (cfg.razorpay_key_id) channels.push('<option value="upi">UPI (Razorpay)</option>');
   layout('Wallet', `
     <div class="balance-card">
       <div class="label">Available Balance</div>
@@ -259,10 +273,7 @@ route('/wallet', async () => {
       <div class="card-title">Recharge</div>
       <input class="input" id="rAmt" type="number" placeholder="Amount (min ${cfg.min_recharge})" />
       <select class="input" id="rCh">
-        <option value="upi_manual">Manual UPI (Instant, no KYC)</option>
-        <option value="upi">UPI (Razorpay)</option>
-        <option value="bank">Bank Transfer</option>
-        <option value="card">Card</option>
+        ${channels.join('')}
       </select>
       <button class="btn btn-primary" id="rBtn">Recharge Now</button>
     </div>
@@ -286,6 +297,11 @@ route('/wallet', async () => {
         return;
       }
       if (d.mock) { toast('Recharged (test mode)'); navigate('/wallet'); return; }
+      if (d.gateway && d.payment_url) {
+        toast('Redirecting to secure payment page...');
+        location.href = d.payment_url;
+        return;
+      }
       // razorpay
       const options = {
         key: d.key_id,
