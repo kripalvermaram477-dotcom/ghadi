@@ -156,7 +156,7 @@ app.post('/api/wallet/recharge', userAuth, ah(async (req, res) => {
     );
     return ok(res, { manual: true, recharge_id: created.rows[0].id, amount: amt, upi_id, upi_name, upi_qr });
   }
-  const rz = getRazorpay();
+  const rz = await getRazorpay();
   const mock = (await getConfig('mock_payments')) === '1';
   if (mock) {
     await query('INSERT INTO recharges (user_id, amount, channel, status) VALUES ($1, $2, $3, $4)', [req.user.id, amt, channel || 'mock', 'success']);
@@ -169,14 +169,14 @@ app.post('/api/wallet/recharge', userAuth, ah(async (req, res) => {
     if (err) return fail(res, err.error?.description || 'Razorpay error', 500);
     try {
       await query('INSERT INTO recharges (user_id, amount, channel, razorpay_order_id, status) VALUES ($1, $2, $3, $4, $5)', [req.user.id, amt, channel || 'razorpay', order.id, 'pending']);
-      ok(res, { order_id: order.id, amount: order.amount, currency: order.currency, key_id: getKeyId() });
+      ok(res, { order_id: order.id, amount: order.amount, currency: order.currency, key_id: await getKeyId() });
     } catch (e) { fail(res, e.message, 500); }
   });
 }));
 
 app.post('/api/wallet/verify', userAuth, ah(async (req, res) => {
   const { razorpay_order_id, razorpay_payment_id, razorpay_signature } = req.body;
-  if (!verifySignature(razorpay_order_id, razorpay_payment_id, razorpay_signature)) return fail(res, 'Invalid signature', 400);
+  if (!(await verifySignature(razorpay_order_id, razorpay_payment_id, razorpay_signature))) return fail(res, 'Invalid signature', 400);
   const r = await get('SELECT * FROM recharges WHERE razorpay_order_id = $1 AND user_id = $2', [razorpay_order_id, req.user.id]);
   if (!r) return fail(res, 'Recharge not found', 404);
   if (r.status === 'success') return ok(res, { already: true });
