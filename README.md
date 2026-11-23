@@ -84,8 +84,28 @@ redirected to the hosted checkout; the site verifies the payment with
 `/api/order-status` and credits the wallet once. The webhook is
 `/api/wallet/rupayex/webhook`. API reference: https://rupayex.net/documentation
 
+## Withdrawals (manual payout)
+
+Withdrawals are paid manually. The user saves a bank account and/or UPI ID in
+**Payout Details**, then requests a withdrawal with their withdraw password.
+The amount (including fee) is deducted from the wallet immediately and a
+`pending` withdrawal is created with a snapshot of the payout details.
+
+To pay:
+
+1. Open **Admin → Withdrawals** (pending requests are shown by default).
+2. Copy the bank/UPI details and transfer the **Net** amount from your own
+   bank or UPI app.
+3. Enter the bank **UTR / reference** in the row and click **Approve**.
+   The user is marked `paid` and their transaction becomes `success`.
+4. **Reject** refunds the full amount to the user's wallet.
+
+Approve stays disabled until a valid UTR (8–18 letters/digits) is entered, so a
+withdrawal cannot be marked paid without a transfer reference.
+
 ## Notes
 
 - Daily payout cron runs at 00:30 IST. Admin can also trigger it manually.
 - Minimum withdrawal: ₹230.
 - Admin can add money to any user from Admin → Users.
+- Withdrawal payouts are manual (bank/UPI); see above.

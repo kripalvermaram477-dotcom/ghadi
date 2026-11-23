@@ -28,6 +28,7 @@ function toast(msg) {
 }
 
 function fmt(n) { return '₹' + Number(n).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
+function esc(s) { return String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
 
 // ---------- Router ----------
 const routes = {};
@@ -340,18 +341,26 @@ route('/withdraw', async () => {
   const cfg = await api('/common/config');
   const bal = await api('/wallet/balance');
   const bank = await api('/user/bank').catch(() => ({ bank: null }));
+  const b = bank.bank || {};
+  const hasUpi = !!b.upi_id;
+  const hasBank = !!(b.account_no && b.ifsc);
+  const methods = [
+    hasUpi ? `<option value="upi">UPI — ${esc(b.upi_id)}</option>` : '',
+    hasBank ? `<option value="bank">Bank — ${esc(b.account_no)}${b.ifsc ? ` (${esc(b.ifsc)})` : ''}</option>` : '',
+  ].join('');
   layout('Withdraw', `
     <div class="balance-card">
       <div class="label">Available Balance</div>
       <div class="amount">${fmt(bal.balance)}</div>
     </div>
-    ${bank.bank ? '' : '<div class="card" style="background:#fef3c7"><a href="#/bank" style="color:var(--primary);font-weight:600">Link bank account first →</a></div>'}
+    ${methods ? '' : '<div class="card" style="background:#fef3c7"><a href="#/bank" style="color:var(--primary);font-weight:600">Add bank account or UPI ID first →</a></div>'}
     <div class="card">
       <div class="card-title">Withdraw</div>
+      ${methods ? `<select class="input" id="wMethod">${methods}</select>` : ''}
       <input class="input" id="wAmt" type="number" placeholder="Amount (min ${cfg.min_withdraw})" />
       <input class="input" id="wPwd" type="password" placeholder="Withdraw password" />
-      <p style="font-size:12px;color:var(--muted);margin-bottom:12px">Fee: ${cfg.withdraw_fee_percent}% · Window: ${cfg.withdraw_start}-${cfg.withdraw_end} IST</p>
-      <button class="btn btn-primary" id="wBtn">Withdraw Now</button>
+      <p style="font-size:12px;color:var(--muted);margin-bottom:12px">Fee: ${cfg.withdraw_fee_percent}% · Window: ${cfg.withdraw_start}-${cfg.withdraw_end} IST<br>Payout manual hai — 24 ghante me process hoga.</p>
+      <button class="btn btn-primary" id="wBtn" ${methods ? '' : 'disabled'}>Withdraw Now</button>
     </div>
     <div class="card">
       <div class="card-title">History</div>
@@ -360,7 +369,11 @@ route('/withdraw', async () => {
   `);
   $('#wBtn').onclick = async () => {
     try {
-      const d = await api('/wallet/withdraw', { method: 'POST', body: JSON.stringify({ amount: Number($('#wAmt').value), password: $('#wPwd').value }) });
+      const d = await api('/wallet/withdraw', { method: 'POST', body: JSON.stringify({
+        amount: Number($('#wAmt').value),
+        password: $('#wPwd').value,
+        method: $('#wMethod')?.value || 'bank',
+      }) });
       toast(`Requested. You'll receive ${fmt(d.net)}`);
       navigate('/wallet');
     } catch (e) { toast(e.message); }
@@ -375,7 +388,8 @@ route('/withdrawals', async () => {
       ${list.map(w => `
         <div style="padding:10px 0;border-bottom:1px solid var(--border)">
           <div style="display:flex;justify-content:space-between"><b>${fmt(w.amount)}</b><span style="color:${w.status==='paid'?'var(--success)':w.status==='failed'?'var(--danger)':'var(--muted)'}">${w.status.toUpperCase()}</span></div>
-          <div style="font-size:12px;color:var(--muted)">Fee ${fmt(w.fee)} · Net ${fmt(w.net)} · ${w.created_at}</div>
+          <div style="font-size:12px;color:var(--muted)">Fee ${fmt(w.fee)} · Net ${fmt(w.net)} · ${String(w.method || 'bank').toUpperCase()}${w.utr ? ` · UTR ${esc(w.utr)}` : ''}</div>
+          <div style="font-size:12px;color:var(--muted)">${w.created_at}</div>
         </div>
       `).join('') || '<div class="empty">No withdrawals</div>'}
     </div>
@@ -418,7 +432,7 @@ route('/my', async () => {
     <div class="card">
       <a href="#/orders" style="display:flex;justify-content:space-between;padding:10px 0;border-bottom:1px solid var(--border)"><span><i class="fa-solid fa-list-check" style="color:var(--primary);margin-right:8px"></i>My Plans</span><i class="fa-solid fa-chevron-right" style="color:var(--muted)"></i></a>
       <a href="#/records" style="display:flex;justify-content:space-between;padding:10px 0;border-bottom:1px solid var(--border)"><span><i class="fa-solid fa-receipt" style="color:var(--primary);margin-right:8px"></i>Transactions</span><i class="fa-solid fa-chevron-right" style="color:var(--muted)"></i></a>
-      <a href="#/bank" style="display:flex;justify-content:space-between;padding:10px 0;border-bottom:1px solid var(--border)"><span><i class="fa-solid fa-building-columns" style="color:var(--primary);margin-right:8px"></i>Bank Details</span><i class="fa-solid fa-chevron-right" style="color:var(--muted)"></i></a>
+      <a href="#/bank" style="display:flex;justify-content:space-between;padding:10px 0;border-bottom:1px solid var(--border)"><span><i class="fa-solid fa-building-columns" style="color:var(--primary);margin-right:8px"></i>Payout Details</span><i class="fa-solid fa-chevron-right" style="color:var(--muted)"></i></a>
       <a href="#/settings" style="display:flex;justify-content:space-between;padding:10px 0;border-bottom:1px solid var(--border)"><span><i class="fa-solid fa-gear" style="color:var(--primary);margin-right:8px"></i>Security</span><i class="fa-solid fa-chevron-right" style="color:var(--muted)"></i></a>
       <a href="#/notices" style="display:flex;justify-content:space-between;padding:10px 0"><span><i class="fa-solid fa-bell" style="color:var(--primary);margin-right:8px"></i>Notices</span><i class="fa-solid fa-chevron-right" style="color:var(--muted)"></i></a>
     </div>
@@ -460,15 +474,19 @@ route('/records', async () => {
 
 route('/bank', async () => {
   const d = await api('/user/bank');
-  const b = d.bank;
-  layout('Bank Details', `
+  const b = d.bank || {};
+  layout('Payout Details', `
     <div class="card">
-      <input class="input" id="holder" placeholder="Account holder name" value="${b?.holder || ''}" />
-      <input class="input" id="bank" placeholder="Bank name" value="${b?.bank || ''}" />
-      <input class="input" id="acc" placeholder="Account number" value="${b?.account_no || ''}" />
-      <input class="input" id="ifsc" placeholder="IFSC code" value="${b?.ifsc || ''}" />
-      <input class="input" id="branch" placeholder="Branch" value="${b?.branch || ''}" />
-      <input class="input" id="addr" placeholder="Address" value="${b?.address || ''}" />
+      <div class="card-title">UPI (fast payout)</div>
+      <input class="input" id="upi" placeholder="UPI ID (example: name@okhdfcbank)" value="${esc(b.upi_id || '')}" />
+      <p style="font-size:12px;color:var(--muted);margin-bottom:14px">UPI se payout sabse fast hota hai. Bank details optional hain.</p>
+      <div class="card-title">Bank account</div>
+      <input class="input" id="holder" placeholder="Account holder name" value="${esc(b.holder || '')}" />
+      <input class="input" id="bank" placeholder="Bank name" value="${esc(b.bank || '')}" />
+      <input class="input" id="acc" placeholder="Account number" value="${esc(b.account_no || '')}" />
+      <input class="input" id="ifsc" placeholder="IFSC code" value="${esc(b.ifsc || '')}" />
+      <input class="input" id="branch" placeholder="Branch" value="${esc(b.branch || '')}" />
+      <input class="input" id="addr" placeholder="Address" value="${esc(b.address || '')}" />
       <button class="btn btn-primary" id="saveBank">Save</button>
     </div>
   `);
@@ -476,7 +494,8 @@ route('/bank', async () => {
     try {
       await api('/user/bank_save', { method: 'POST', body: JSON.stringify({
         holder: $('#holder').value, bank: $('#bank').value, account_no: $('#acc').value,
-        ifsc: $('#ifsc').value, branch: $('#branch').value, address: $('#addr').value
+        ifsc: $('#ifsc').value, branch: $('#branch').value, address: $('#addr').value,
+        upi_id: $('#upi').value
       }) });
       toast('Saved');
     } catch (e) { toast(e.message); }

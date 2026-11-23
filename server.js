@@ -306,6 +306,7 @@ app.get('/api/wallet/records', userAuth, ah(async (req, res) => {
 
 app.post('/api/wallet/withdraw', userAuth, ah(async (req, res) => {
   const { amount, password } = req.body;
+  const method = req.body.method === 'upi' ? 'upi' : 'bank';
   const user = await get('SELECT * FROM users WHERE id = $1', [req.user.id]);
   if (!user.withdraw_password_hash || !verifyPassword(password, user.withdraw_password_hash)) return fail(res, 'Invalid withdraw password', 401);
   const min = Number(await getConfig('min_withdraw'));
@@ -316,13 +317,28 @@ app.post('/api/wallet/withdraw', userAuth, ah(async (req, res) => {
   const fee = +(amt * feePct / 100).toFixed(2);
   const net = +(amt - fee).toFixed(2);
   const bank = await get('SELECT * FROM bank_details WHERE user_id = $1', [req.user.id]);
-  if (!bank) return fail(res, 'Please add bank details first');
-  await query('UPDATE users SET balance = balance - $1 WHERE id = $2', [amt, req.user.id]);
-  await query('INSERT INTO withdrawals (user_id, amount, fee, net, bank_snapshot, status) VALUES ($1, $2, $3, $4, $5, $6)', [
-    req.user.id, amt, fee, net, JSON.stringify(bank), 'pending',
+  if (!bank) return fail(res, 'Please add payout details first');
+  if (method === 'upi' && !bank.upi_id) return fail(res, 'Please add your UPI ID first');
+  if (method === 'bank' && (!bank.account_no || !bank.ifsc)) return fail(res, 'Please add your bank account first');
+  const snapshot = JSON.stringify({
+    method,
+    holder: bank.holder || null,
+    bank: bank.bank || null,
+    account_no: bank.account_no || null,
+    ifsc: bank.ifsc || null,
+    branch: bank.branch || null,
+    upi_id: bank.upi_id || null,
+  });
+  const deducted = await query('UPDATE users SET balance = balance - $1 WHERE id = $2 AND balance >= $1 RETURNING id', [amt, req.user.id]);
+  if (deducted.rowCount !== 1) return fail(res, 'Insufficient balance');
+  const wd = await query('INSERT INTO withdrawals (user_id, amount, fee, net, bank_snapshot, status, method) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id', [
+    req.user.id, amt, fee, net, snapshot, 'pending', method,
   ]);
-  await query('INSERT INTO transactions (user_id, type, amount, status, note) VALUES ($1, $2, $3, $4, $5)', [req.user.id, 'withdraw', amt, 'pending', 'Withdrawal request']);
-  ok(res, { fee, net });
+  const wdId = wd.rows[0].id;
+  await query('INSERT INTO transactions (user_id, type, amount, status, note, ref_id) VALUES ($1, $2, $3, $4, $5, $6)', [
+    req.user.id, 'withdraw', amt, 'pending', 'Withdrawal request', wdId,
+  ]);
+  ok(res, { id: wdId, fee, net });
 }));
 
 app.get('/api/wallet/withdraw_list', userAuth, ah(async (req, res) => {
@@ -342,12 +358,18 @@ app.get('/api/user/bank', userAuth, ah(async (req, res) => {
 }));
 
 app.post('/api/user/bank_save', userAuth, ah(async (req, res) => {
-  const { holder, bank, account_no, ifsc, branch, address } = req.body;
+  const { holder, bank, branch, address } = req.body;
+  const upi_id = String(req.body.upi_id || '').trim();
+  const account_no = String(req.body.account_no || '').trim();
+  const ifsc = String(req.body.ifsc || '').trim().toUpperCase();
+  if (upi_id && !/^[\w.\-]{2,}@[a-zA-Z]{2,}$/.test(upi_id)) return fail(res, 'Invalid UPI ID (example: name@okhdfcbank)');
+  if (!upi_id && (!account_no || !ifsc)) return fail(res, 'Add a bank account or a UPI ID');
+  if (ifsc && !/^[A-Z]{4}0[A-Z0-9]{6}$/.test(ifsc)) return fail(res, 'Invalid IFSC code');
   const existing = await get('SELECT id FROM bank_details WHERE user_id = $1', [req.user.id]);
   if (existing) {
-    await query('UPDATE bank_details SET holder = $1, bank = $2, account_no = $3, ifsc = $4, branch = $5, address = $6, updated_at = now() WHERE user_id = $7', [holder, bank, account_no, ifsc, branch, address, req.user.id]);
+    await query('UPDATE bank_details SET holder = $1, bank = $2, account_no = $3, ifsc = $4, branch = $5, address = $6, upi_id = $7, updated_at = now() WHERE user_id = $8', [holder, bank, account_no, ifsc, branch, address, upi_id, req.user.id]);
   } else {
-    await query('INSERT INTO bank_details (user_id, holder, bank, account_no, ifsc, branch, address) VALUES ($1, $2, $3, $4, $5, $6, $7)', [req.user.id, holder, bank, account_no, ifsc, branch, address]);
+    await query('INSERT INTO bank_details (user_id, holder, bank, account_no, ifsc, branch, address, upi_id) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)', [req.user.id, holder, bank, account_no, ifsc, branch, address, upi_id]);
   }
   ok(res, {});
 }));
@@ -446,23 +468,51 @@ app.post('/admin-api/users/:id/balance', adminAuth, ah(async (req, res) => {
 
 // withdrawals
 app.get('/admin-api/withdrawals', adminAuth, ah(async (req, res) => {
-  const list = await all(`
+  const rows = await all(`
     SELECT w.*, u.phone FROM withdrawals w LEFT JOIN users u ON u.id = w.user_id ORDER BY w.id DESC
   `);
-  ok(res, { withdrawals: list });
+  const withdrawals = rows.map((w) => {
+    let payout = null;
+    try { payout = w.bank_snapshot ? JSON.parse(w.bank_snapshot) : null; } catch { payout = null; }
+    return { ...w, payout };
+  });
+  ok(res, { withdrawals });
 }));
 app.post('/admin-api/withdrawals/:id/approve', adminAuth, ah(async (req, res) => {
+  const utr = String(req.body.utr || '').trim();
+  if (!/^[A-Za-z0-9]{8,18}$/.test(utr)) return fail(res, 'Enter a valid UTR / reference (8-18 letters or digits)');
   const w = await get('SELECT * FROM withdrawals WHERE id = $1', [req.params.id]);
   if (!w) return fail(res, 'Not found', 404);
-  await query('UPDATE withdrawals SET status = $1, processed_at = now() WHERE id = $2', ['paid', req.params.id]);
-  await query('UPDATE transactions SET status = $1 WHERE user_id = $2 AND type = $3 AND amount = $4 AND status = $5', ['success', w.user_id, 'withdraw', w.amount, 'pending']);
+  if (w.status !== 'pending') return fail(res, 'Already processed', 409);
+  const updated = await query(
+    "UPDATE withdrawals SET status = 'paid', utr = $1, processed_at = now() WHERE id = $2 AND status = 'pending' RETURNING id",
+    [utr, req.params.id]
+  );
+  if (updated.rowCount !== 1) return fail(res, 'Already processed', 409);
+  await query(
+    `UPDATE transactions SET status = 'success', note = COALESCE(note, '') || $1
+     WHERE user_id = $2 AND type = 'withdraw' AND status = 'pending'
+       AND (ref_id = $3 OR (ref_id IS NULL AND amount = $4))`,
+    [` · UTR ${utr}`, w.user_id, w.id, w.amount]
+  );
   ok(res, {});
 }));
 app.post('/admin-api/withdrawals/:id/reject', adminAuth, ah(async (req, res) => {
   const w = await get('SELECT * FROM withdrawals WHERE id = $1', [req.params.id]);
   if (!w) return fail(res, 'Not found', 404);
+  if (w.status !== 'pending') return fail(res, 'Already processed', 409);
+  const updated = await query(
+    "UPDATE withdrawals SET status = 'failed', processed_at = now() WHERE id = $1 AND status = 'pending' RETURNING id",
+    [req.params.id]
+  );
+  if (updated.rowCount !== 1) return fail(res, 'Already processed', 409);
   await query('UPDATE users SET balance = balance + $1 WHERE id = $2', [w.amount, w.user_id]);
-  await query('UPDATE withdrawals SET status = $1, processed_at = now() WHERE id = $2', ['failed', req.params.id]);
+  await query(
+    `UPDATE transactions SET status = 'failed'
+     WHERE user_id = $1 AND type = 'withdraw' AND status = 'pending'
+       AND (ref_id = $2 OR (ref_id IS NULL AND amount = $3))`,
+    [w.user_id, w.id, w.amount]
+  );
   ok(res, {});
 }));
 

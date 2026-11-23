@@ -23,6 +23,12 @@ function toast(msg) {
 }
 
 function fmt(n) { return '₹' + Number(n).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
+function esc(s) { return String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
+async function copyText(text) {
+  try { await navigator.clipboard.writeText(String(text)); toast('Copied'); }
+  catch { prompt('Copy:', String(text)); }
+}
+function isUtr(v) { return /^[A-Za-z0-9]{8,18}$/.test(String(v || '').trim()); }
 
 let currentView = 'dashboard';
 
@@ -221,36 +227,80 @@ async function renderUsers() {
   });
 }
 
+let wdShowAll = false;
+
+function payoutCell(w) {
+  const p = w.payout || {};
+  const method = String(p.method || w.method || 'bank').toLowerCase();
+  const line = (label, value) => value
+    ? `<div class="payout-line"><span class="payout-label">${label}</span><code>${esc(value)}</code><button class="btn btn-outline btn-sm" data-copy="${esc(value)}">Copy</button></div>`
+    : '';
+  const rows = [
+    line('Holder', p.holder),
+    line('A/C', p.account_no),
+    line('IFSC', p.ifsc),
+    line('UPI', p.upi_id),
+  ].filter(Boolean);
+  if (!rows.length) return '<span style="color:var(--muted)">No payout details</span>';
+  return `<div><span class="badge badge-${method === 'upi' ? 'upi' : 'bank'}">${method.toUpperCase()}</span>${rows.join('')}</div>`;
+}
+
 async function renderWithdrawals() {
   const d = await api('/withdrawals');
-  const list = d.withdrawals || [];
+  const all = d.withdrawals || [];
+  const pending = all.filter((w) => w.status === 'pending').length;
+  const list = wdShowAll ? all : all.filter((w) => w.status === 'pending');
   layout(`
-    <div class="topbar"><h2>Withdrawals</h2></div>
-    <div class="card">
+    <div class="topbar">
+      <h2>Withdrawals <span class="pill">${pending} pending</span></h2>
+      <button class="btn btn-outline" id="wdToggle">${wdShowAll ? 'Show pending only' : 'Show all'}</button>
+    </div>
+    <div class="card" style="overflow-x:auto">
       <table>
-        <thead><tr><th>ID</th><th>User</th><th>Amount</th><th>Net</th><th>Status</th><th>Actions</th></tr></thead>
+        <thead><tr><th>ID</th><th>User</th><th>Amount</th><th>Net</th><th>Payout details</th><th>UTR / Ref</th><th>Status</th><th>Actions</th></tr></thead>
         <tbody>
           ${list.map(w => `
             <tr>
               <td>${w.id}</td>
-              <td>${w.phone || w.user_id}</td>
+              <td>${esc(w.phone || w.user_id)}</td>
               <td>${fmt(w.amount)}</td>
-              <td>${fmt(w.net)}</td>
-              <td>${w.status}</td>
+              <td><b>${fmt(w.net)}</b></td>
+              <td>${payoutCell(w)}</td>
+              <td>${w.status === 'pending'
+                ? `<input class="input utr-input" data-utr="${w.id}" placeholder="UTR / Ref" value="${esc(w.utr || '')}" />`
+                : esc(w.utr || '-')}</td>
+              <td><span class="badge st-${esc(w.status)}">${esc(w.status)}</span></td>
               <td>
-                ${w.status === 'pending' ? `<button class="btn btn-success" data-ap="${w.id}">Approve</button> <button class="btn btn-danger" data-rj="${w.id}">Reject</button>` : ''}
+                ${w.status === 'pending' ? `<button class="btn btn-success" data-ap="${w.id}" disabled>Approve</button> <button class="btn btn-danger" data-rj="${w.id}">Reject</button>` : ''}
               </td>
             </tr>
-          `).join('')}
+          `).join('') || '<tr><td colspan="8" style="text-align:center;color:var(--muted)">No withdrawals</td></tr>'}
         </tbody>
       </table>
     </div>
   `);
+  $('#wdToggle').onclick = () => { wdShowAll = !wdShowAll; renderWithdrawals(); };
+  document.querySelectorAll('[data-copy]').forEach((b) => { b.onclick = () => copyText(b.dataset.copy); });
+  document.querySelectorAll('[data-utr]').forEach((inp) => {
+    const btn = document.querySelector(`[data-ap="${inp.dataset.utr}"]`);
+    const sync = () => { btn.disabled = !isUtr(inp.value); };
+    inp.addEventListener('input', sync);
+    sync();
+  });
   document.querySelectorAll('[data-ap]').forEach(b => {
-    b.onclick = async () => { try { await api('/withdrawals/' + b.dataset.ap + '/approve', { method: 'POST' }); toast('Approved'); renderWithdrawals(); } catch (e) { toast(e.message); } };
+    b.onclick = async () => {
+      const id = b.dataset.ap;
+      const utr = (document.querySelector(`[data-utr="${id}"]`)?.value || '').trim();
+      if (!isUtr(utr)) return toast('Enter UTR / reference first');
+      if (!confirm('Paisa transfer ho gaya? Approve karne par user ko PAID mark hoga.')) return;
+      try {
+        await api('/withdrawals/' + id + '/approve', { method: 'POST', body: JSON.stringify({ utr }) });
+        toast('Paid & approved'); renderWithdrawals();
+      } catch (e) { toast(e.message); }
+    };
   });
   document.querySelectorAll('[data-rj]').forEach(b => {
-    b.onclick = async () => { if (!confirm('Reject & refund?')) return; try { await api('/withdrawals/' + b.dataset.rj + '/reject', { method: 'POST' }); toast('Rejected'); renderWithdrawals(); } catch (e) { toast(e.message); } };
+    b.onclick = async () => { if (!confirm('Reject & refund balance?')) return; try { await api('/withdrawals/' + b.dataset.rj + '/reject', { method: 'POST' }); toast('Rejected'); renderWithdrawals(); } catch (e) { toast(e.message); } };
   });
 }
 
