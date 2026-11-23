@@ -37,20 +37,32 @@ Change the password right after the first login (Admin → Settings).
 | `ADMIN_PHONE` / `ADMIN_PASSWORD` | First-run admin account |
 | `PGLITE_PATH` | Local embedded DB folder (default `./data/ghadi-pg`) |
 
-## Deploy on Render (free)
+## Deploy on Render (image-backed)
 
-The included `render.yaml` creates a free web service **and** a free Postgres
-database, and wires `DATABASE_URL` automatically.
+Production deploys do not build on Render. GitHub Actions builds the Docker
+image, pushes it to GitHub Container Registry, and then triggers the Render
+deploy:
 
-1. Push this repo to GitHub.
-2. On Render: **New → Blueprint**, connect the repo and apply.
-3. Set `ADMIN_PASSWORD` when prompted (the only value that is not generated).
-4. Deploy. Tables and seed data are created automatically.
+1. Push to `master`.
+2. `.github/workflows/docker.yml` builds `ghcr.io/<owner>/ghadi:latest` and
+   pushes it using the repo's `GITHUB_TOKEN`.
+3. The same workflow calls the Render API to deploy the new image.
+4. Render pulls the image with the `ghadi-ghcr` registry credential and
+   restarts the service at https://ghadi.onrender.com.
 
-Or manually: **New → Web Service** (Free), build `npm install`, start
-`npm start`, health check `/api/common/config`, then create a Postgres and add
-its connection string as `DATABASE_URL`, plus `USER_JWT_SECRET`,
-`ADMIN_JWT_SECRET`, `ADMIN_PHONE`, `ADMIN_PASSWORD`.
+Required GitHub repository secret: `RENDER_API_KEY` (Render workspace API key).
+
+The Render service is image-backed (`runtime: image`, image
+`ghcr.io/<owner>/ghadi:latest`). Environment variables (`DATABASE_URL`, JWT
+secrets, admin login) stay in Render. `render.yaml` is the original blueprint
+and is not used for image deploys.
+
+Local Docker run:
+
+```bash
+docker build -t ghadi .
+docker run --rm -p 3000:3000 --env-file .env ghadi
+```
 
 > Render's free Postgres is deleted after 30 days. For long-term use, create a
 > free Postgres on Neon (https://neon.tech) and replace `DATABASE_URL` with its
