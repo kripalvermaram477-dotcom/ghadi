@@ -29,3 +29,13 @@ jobs:
           platforms: linux/amd64
           push: true
           tags: ghcr.io/${{ github.repository }}:latest
+
+      - name: Trigger Render deploy
+        if: github.ref == 'refs/heads/master'
+        env:
+          RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+        run: |
+          curl -fsS -X POST "https://api.render.com/v1/services/srv-dc0lml3m8hqs73etn38g/deploys" \
+            -H "Authorization: Bearer $RENDER_API_KEY" \
+            -H "Content-Type: application/json" \
+            -d '{"clearCache":"do_not_clear"}'
